@@ -148,7 +148,7 @@ WebRadioInterface::WebRadioInterface(CVirtualInput& in,
 {
     {
         // Ensure that rx always exists when rx_mut is free!
-        lock_guard<mutex> lock(rx_mut);
+        lock_guard<timed_mutex> lock(rx_mut);
 
         bool success = serverSocket.bind(port);
         if (success) {
@@ -178,7 +178,7 @@ WebRadioInterface::~WebRadioInterface()
     }
 
     {
-        lock_guard<mutex> lock(rx_mut);
+        lock_guard<timed_mutex> lock(rx_mut);
         rx.reset();
     }
 }
@@ -187,7 +187,7 @@ class TuneFailed {};
 
 void WebRadioInterface::check_decoders_required()
 {
-    lock_guard<mutex> lock(rx_mut);
+    lock_guard<timed_mutex> lock(rx_mut);
     ASSERT_RX;
 
     try {
@@ -268,7 +268,7 @@ void WebRadioInterface::retune(const string& channel)
 
     cerr << "RETUNE Take ownership of RX" << endl;
     {
-        unique_lock<mutex> lock(rx_mut);
+        unique_lock<timed_mutex> lock(rx_mut);
         // Even though it would be ok for rx to be inexistent here,
         // we check to uncover errors.
         ASSERT_RX;
@@ -502,6 +502,10 @@ bool WebRadioInterface::dispatch_client(Socket&& client)
             else if (req.url == "/channel") {
                 success = send_channel(s);
             }
+            else if (req.url == "/status") {
+                // Endpoint leger : repond meme en signal degrade (ne touche pas rx_mut)
+                success = send_status(s);
+            }
             else if (req.url == "/fftwindowplacement" or req.url == "/enablecoarsecorrector") {
                 send_http_response(s, http_405,
                         "405 Method Not Allowed\r\n" + req.url + " is POST-only");
@@ -557,6 +561,10 @@ bool WebRadioInterface::dispatch_client(Socket&& client)
             }
             else if (req.url == "/enablecoarsecorrector") {
                 success = handle_coarse_corrector_post(s, req.post_data);
+            }
+            else if (req.url == "/reset") {
+                // Reset du decodeur sans tuer le processus
+                success = handle_reset_post(s);
             }
             else {
                 cerr << "Could not understand POST request " << req.url << endl;
@@ -647,7 +655,23 @@ bool WebRadioInterface::send_mux_json(Socket& s)
     }
 
     {
-        lock_guard<mutex> lock(rx_mut);
+        // timed_mutex : timeout 3s pour eviter le freeze HTTP
+        // quand le demodulateur est bloque (signal tres degrade)
+        unique_lock<timed_mutex> lock(rx_mut, chrono::seconds(3));
+        if (!lock.owns_lock()) {
+            cerr << "send_mux_json: rx_mut timeout - signal trop degrade" << endl;
+            // Repondre avec un JSON minimal plutot que freezer indefiniment
+            lock_guard<mutex> data_lock(data_mut);
+            string degraded = "{\"error\":\"receiver_busy\","
+                "\"server_time\":" + to_string(time(nullptr)) + ","
+                "\"demodulator\":{\"snr\":" + to_string(last_snr) + ","
+                "\"frequencycorrection\":" + to_string(last_fine_correction + last_coarse_correction) + "},"
+                "\"services\":[]}";
+            if (!send_http_response(s, http_ok, "", http_contenttype_json))
+                return false;
+            ssize_t ret = s.send(degraded.c_str(), degraded.size(), MSG_NOSIGNAL);
+            return ret != -1;
+        }
         ASSERT_RX;
 
         mux_json.ensemble.label = rx->getEnsembleLabel();
@@ -804,6 +828,16 @@ bool WebRadioInterface::send_mux_json(Socket& s)
         mux_json.cir_peaks = calculate_cir_peaks(last_CIR);
     }
 
+    // server_time : timestamp Unix cote serveur
+    // Permet de calculer la fraicheur des donnees sans synchro d'horloge
+    mux_json.server_time = static_cast<int64_t>(time(nullptr));
+
+    // current_carousel_sid : SID du service actif en mode carousel (-C N)
+    if (!carousel_services_active.empty()) {
+        mux_json.current_carousel_sid =
+            to_hex(carousel_services_active.front().sid, 4);
+    }
+
     if (not send_http_response(s, http_ok, "", http_contenttype_json)) {
         return false;
     }
@@ -824,7 +858,7 @@ bool WebRadioInterface::send_mux_playlist(Socket& s)
     m3u << "#EXTM3U\n";
 
     {
-        lock_guard<mutex> lock(rx_mut);
+        lock_guard<timed_mutex> lock(rx_mut);
         ASSERT_RX;
 
         for (const auto& s : rx->getServiceList()) {
@@ -867,7 +901,7 @@ bool WebRadioInterface::send_mux_playlist(Socket& s)
 
 bool WebRadioInterface::send_stream(Socket& s, const string& stream)
 {
-    unique_lock<mutex> lock(rx_mut);
+    unique_lock<timed_mutex> lock(rx_mut);
     ASSERT_RX;
 
     for (const auto& srv : rx->getServiceList()) {
@@ -1184,7 +1218,7 @@ bool WebRadioInterface::handle_fft_window_placement_post(Socket& s, const string
     }
 
     {
-        lock_guard<mutex> lock(rx_mut);
+        lock_guard<timed_mutex> lock(rx_mut);
         ASSERT_RX;
         rx->setReceiverOptions(rro);
     }
@@ -1227,7 +1261,7 @@ bool WebRadioInterface::handle_coarse_corrector_post(Socket& s, const string& co
     }
 
     {
-        lock_guard<mutex> lock(rx_mut);
+        lock_guard<timed_mutex> lock(rx_mut);
         ASSERT_RX;
         rx->setReceiverOptions(rro);
     }
@@ -1269,7 +1303,7 @@ void WebRadioInterface::handle_phs()
     while (running) {
         this_thread::sleep_for(chrono::seconds(2));
 
-        unique_lock<mutex> lock(rx_mut);
+        unique_lock<timed_mutex> lock(rx_mut);
         ASSERT_RX;
 
         auto serviceList = rx->getServiceList();
@@ -1378,7 +1412,7 @@ void WebRadioInterface::handle_phs()
 
     cerr << "TEARDOWN Cancel all PHs and remove services" << endl;
     {
-        lock_guard<mutex> lock(rx_mut);
+        lock_guard<timed_mutex> lock(rx_mut);
         for (auto& ph : phs) {
             ph.second.cancelAll();
 
@@ -1391,7 +1425,7 @@ void WebRadioInterface::handle_phs()
 
     cerr << "TEARDOWN Stop rx" << endl;
     {
-        unique_lock<mutex> lock(rx_mut);
+        unique_lock<timed_mutex> lock(rx_mut);
         rx->stop();
     }
 }
@@ -1640,4 +1674,68 @@ list<tii_measurement_t> WebRadioInterface::getTiiStats()
     }
 
     return l;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Nouvelles methodes ajoutees pour DAB+ Monitor
+// ─────────────────────────────────────────────────────────────────────────────
+
+bool WebRadioInterface::send_status(Socket& s)
+{
+    // Endpoint leger /status
+    // N'acquiert PAS rx_mut — repond meme quand le demodulateur est bloque
+    // Utilise uniquement data_mut et fib_mut, toujours disponibles
+    string json = "{"
+        "\"alive\":true,"
+        "\"server_time\":" + to_string(time(nullptr)) + ",";
+
+    {
+        lock_guard<mutex> lock(data_mut);
+        json += "\"snr\":" + to_string(last_snr) + ","
+                "\"frequencycorrection\":" +
+                to_string(last_fine_correction + last_coarse_correction) + ",";
+    }
+
+    {
+        lock_guard<mutex> lock(fib_mut);
+        json += "\"fic_crc_errors\":" + to_string(num_fic_crc_errors);
+    }
+
+    json += "}";
+
+    if (!send_http_response(s, http_ok, "", http_contenttype_json))
+        return false;
+    ssize_t ret = s.send(json.c_str(), json.size(), MSG_NOSIGNAL);
+    return ret != -1;
+}
+
+bool WebRadioInterface::handle_reset_post(Socket& s)
+{
+    // POST /reset : redemarre le decodeur sans tuer le processus welle-cli
+    // Utile quand le dongle USB se fige sans que le processus ne plante
+    cerr << "RESET: Redemarrage du decodeur demande par DAB+ Monitor" << endl;
+
+    // Lancer le restart dans un thread detache pour repondre immediatement
+    thread([this]() {
+        this_thread::sleep_for(chrono::milliseconds(200));
+        try {
+            unique_lock<timed_mutex> lock(rx_mut, chrono::seconds(5));
+            if (lock.owns_lock() && rx) {
+                cerr << "RESET: restart_decoder()" << endl;
+                rx->restart_decoder();
+            } else {
+                cerr << "RESET: impossible d'acquerir rx_mut" << endl;
+            }
+        } catch (const exception& e) {
+            cerr << "RESET erreur: " << e.what() << endl;
+        }
+    }).detach();
+
+    string json = "{\"status\":\"resetting\","
+                  "\"server_time\":" + to_string(time(nullptr)) + "}";
+
+    if (!send_http_response(s, http_ok, "", http_contenttype_json))
+        return false;
+    ssize_t ret = s.send(json.c_str(), json.size(), MSG_NOSIGNAL);
+    return ret != -1;
 }

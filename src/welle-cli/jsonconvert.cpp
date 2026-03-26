@@ -227,6 +227,12 @@ static void to_json(nlohmann::json& j, const MuxJson& mux) {
     j["demodulator"]["time_last_fct0_frame"] = timelastfct0_ms;
     j["demodulator"]["snr"] = mux.demodulator_snr;
     j["demodulator"]["frequencycorrection"] = mux.demodulator_frequencycorrection;
+
+    // Champs ajoutes pour DAB+ Monitor
+    j["server_time"] = mux.server_time;
+    if (!mux.current_carousel_sid.empty()) {
+        j["current_carousel_sid"] = mux.current_carousel_sid;
+    }
 }
 
 std::string build_mux_json(const MuxJson& mux)

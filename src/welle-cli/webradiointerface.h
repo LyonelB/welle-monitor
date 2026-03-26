@@ -126,6 +126,12 @@ class WebRadioInterface : public RadioControllerInterface {
         // in decimal
         bool send_slide(Socket& s, const std::string& stream);
 
+        // Endpoint leger /status — ne touche pas rx_mut, repond meme en signal degrade
+        bool send_status(Socket& s);
+
+        // Reset du decodeur sans tuer le processus (POST /reset)
+        bool handle_reset_post(Socket& s);
+
         // Send the Fast Information Channel as a stream.
         // Every FIB is 32 bytes long, there three FIBs per 24ms interval,
         // which gives 32000 bits/s
@@ -198,7 +204,9 @@ class WebRadioInterface : public RadioControllerInterface {
 
         Socket serverSocket;
 
-        mutable std::mutex rx_mut;
+        // timed_mutex : permet un timeout dans send_mux_json
+        // evite le freeze HTTP quand le demodulateur est bloque (signal degrade)
+        mutable std::timed_mutex rx_mut;
         std::chrono::time_point<std::chrono::system_clock> time_rx_created;
         std::unique_ptr<RadioReceiver> rx;
 

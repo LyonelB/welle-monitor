@@ -142,6 +142,12 @@ struct MuxJson {
 
     std::list<tii_measurement_t> tii;
     std::vector<PeakJson> cir_peaks;
+
+    // Champs ajoutes pour DAB+ Monitor
+    // Timestamp Unix cote serveur (secondes)
+    int64_t server_time = 0;
+    // SID du service actif en mode carousel (-C N), vide si mode -D
+    std::string current_carousel_sid;
 };
 
 std::string build_mux_json(const MuxJson& mux);
