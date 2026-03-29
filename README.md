@@ -88,3 +88,8 @@ GPL-2.0-or-later — identique au projet original [welle.io](https://github.com/
 
 - welle.io : Albrecht Lohofener & Matthias P. Braendli
 - Modifications DAB+ Monitor : Lyonel B. — [Graffiti Radio](https://graffitiradio.fr), La Roche-sur-Yon
+
+## Issue upstream
+
+Ces modifications ont été signalées aux mainteneurs de welle.io :
+https://github.com/AlbrechtL/welle.io/issues/911
