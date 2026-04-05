@@ -112,6 +112,7 @@ static const char* http_contenttype_ico =
         "Content-Type: image/x-icon\r\n";
 
 static const char* http_nocache = "Cache-Control: no-cache\r\n";
+static const char* http_connection_close = "Connection: close\r\n";
 
 static string to_hex(uint32_t value, int width)
 {
@@ -127,6 +128,7 @@ static bool send_http_response(Socket& s, const string& statuscode,
     string headers = statuscode;
     headers += content_type;
     headers += http_nocache;
+    headers += http_connection_close;
     headers += "\r\n";
     headers += data;
     ssize_t ret = s.send(headers.data(), headers.size(), MSG_NOSIGNAL);
@@ -567,7 +569,15 @@ bool WebRadioInterface::dispatch_client(Socket&& client)
                 success = handle_reset_post(s);
             }
             else {
-                cerr << "Could not understand POST request " << req.url << endl;
+                // POST /carousel/pin/<sid> : force le carousel sur ce SID immediatement
+                const regex regex_pin(R"(^[/]carousel[/]pin[/]([^ ]+))");
+                smatch match_pin;
+                if (regex_search(req.url, match_pin, regex_pin)) {
+                    success = handle_carousel_pin_post(s, match_pin[1]);
+                }
+                else {
+                    cerr << "Could not understand POST request " << req.url << endl;
+                }
             }
         }
         else {
@@ -1734,6 +1744,63 @@ bool WebRadioInterface::handle_reset_post(Socket& s)
     string json = "{\"status\":\"resetting\","
                   "\"server_time\":" + to_string(time(nullptr)) + "}";
 
+    if (!send_http_response(s, http_ok, "", http_contenttype_json))
+        return false;
+    ssize_t ret = s.send(json.c_str(), json.size(), MSG_NOSIGNAL);
+    return ret != -1;
+}
+
+bool WebRadioInterface::handle_carousel_pin_post(Socket& s, const std::string& sid_str)
+{
+    // POST /carousel/pin/<sid>
+    // Force welle-cli a decoder immediatement le service demande
+    // sans attendre la rotation naturelle du carousel.
+    // Permet de reduire le delai de lancement du player dans DAB+ Monitor.
+    cerr << "CAROUSEL PIN: " << sid_str << endl;
+
+    uint32_t sid = 0;
+    try {
+        sid = stoul(sid_str, nullptr, 16);
+    } catch (const exception& e) {
+        cerr << "CAROUSEL PIN: SID invalide : " << sid_str << endl;
+        return send_http_response(s, http_400, "{\"error\":\"invalid_sid\"}",
+                                  http_contenttype_json);
+    }
+
+    {
+        unique_lock<timed_mutex> lock(rx_mut, chrono::seconds(2));
+        if (!lock.owns_lock()) {
+            cerr << "CAROUSEL PIN: rx_mut timeout" << endl;
+            return send_http_response(s, http_503,
+                "{\"error\":\"receiver_busy\"}", http_contenttype_json);
+        }
+
+        // Verifier que le SID existe dans le bouquet
+        bool found = false;
+        if (rx) {
+            for (const auto& srv : rx->getServiceList()) {
+                if (srv.serviceId == sid) { found = true; break; }
+            }
+        }
+        if (!found) {
+            return send_http_response(s, http_404,
+                "{\"error\":\"sid_not_found\"}", http_contenttype_json);
+        }
+
+        // Mettre le service demande en tete de liste active du carousel
+        // La prochaine iteration de handle_phs le decodera en priorite
+        carousel_services_active.remove_if(
+            [&](const ActiveCarouselService& acs) { return acs.sid == sid; });
+        carousel_services_active.push_front(ActiveCarouselService(sid));
+    }
+
+    // Declencher immediatement la reevaluation des decodeurs
+    check_decoders_required();
+
+    string json = string("{") +
+                  "\"status\":\"pinned\"," +
+                  "\"sid\":\"" + sid_str + "\"," +
+                  "\"server_time\":" + to_string(time(nullptr)) + "}";
     if (!send_http_response(s, http_ok, "", http_contenttype_json))
         return false;
     ssize_t ret = s.send(json.c_str(), json.size(), MSG_NOSIGNAL);
