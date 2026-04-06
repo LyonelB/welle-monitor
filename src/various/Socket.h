@@ -77,6 +77,7 @@ class Socket {
 
         ssize_t recv(void *buffer, size_t length, int flags);
         ssize_t send(const void *buffer, size_t length, int flags);
+        int get_fd() const { return sock; }  // pour shutdown() externe
 
     private:
         int sock = INVALID_SOCKET;

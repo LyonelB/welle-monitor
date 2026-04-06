@@ -588,6 +588,15 @@ bool WebRadioInterface::dispatch_client(Socket&& client)
             send_http_response(s, http_404, "Could not understand request.\r\n");
         }
 
+        // Fermer proprement la socket après chaque requête non-streaming.
+        // Cela évite l'accumulation de connexions CLOSE-WAIT qui sature
+        // les file descriptors et bloque le serveur HTTP.
+        // Les routes streaming (/mp3, /stream, /flac) gèrent leur propre
+        // cycle de vie et ne passent pas par ici une fois le streaming démarré.
+#if !defined(_WIN32)
+        ::shutdown(s.get_fd(), SHUT_RDWR);
+#endif
+
         return success;
     }
 }

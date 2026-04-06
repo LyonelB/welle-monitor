@@ -61,6 +61,11 @@ static SocketInitialiseWrapper socketInitialiseWrapper;
 Socket::~Socket()
 {
     if (valid()) {
+#if !defined(_WIN32)
+        // shutdown avant close() pour forcer la fermeture TCP immédiate
+        // et éviter l'accumulation de connexions CLOSE-WAIT
+        ::shutdown(sock, SHUT_RDWR);
+#endif
         close();
     }
 }
