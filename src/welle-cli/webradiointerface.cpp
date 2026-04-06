@@ -1472,12 +1472,12 @@ void WebRadioInterface::serve()
     }
 #endif
 
+    // Limite le nombre de connexions simultanées pour éviter l'épuisement
+    // des file descriptors et des threads (chaque connexion = 1 thread async)
+    const size_t MAX_CONNECTIONS = 32;
+
     while (sig_caught == 0) {
-        auto client = serverSocket.accept();
-
-        running_connections.push_back(async(launch::async,
-                    &WebRadioInterface::dispatch_client, this, move(client)));
-
+        // Nettoyer les connexions terminées avant d'en accepter de nouvelles
         deque<future<bool> > still_running_connections;
         for (auto& fut : running_connections) {
             if (fut.valid()) {
@@ -1493,6 +1493,16 @@ void WebRadioInterface::serve()
             }
         }
         running_connections = move(still_running_connections);
+
+        // Si trop de connexions actives, attendre avant d'en accepter une nouvelle
+        if (running_connections.size() >= MAX_CONNECTIONS) {
+            this_thread::sleep_for(chrono::milliseconds(10));
+            continue;
+        }
+
+        auto client = serverSocket.accept();
+        running_connections.push_back(async(launch::async,
+                    &WebRadioInterface::dispatch_client, this, move(client)));
     }
 
     cerr << "SERVE No more connections running" << endl;
