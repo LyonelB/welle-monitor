@@ -108,6 +108,19 @@ void CRTL_SDR::open_device()
         std::clog << "RTL_SDR: " << " gain " << (gains[i - 1] / 10.0) << std::endl;
     }
 
+    // Correction PPM via variable d'environnement RTLSDR_PPM
+    // Ex: export RTLSDR_PPM=-28
+    const char* ppm_env = std::getenv("RTLSDR_PPM");
+    if (ppm_env) {
+        int ppm = std::atoi(ppm_env);
+        ret = rtlsdr_set_freq_correction(device, ppm);
+        if (ret < 0 && ret != -2) {
+            std::clog << "RTL_SDR: " << "Warning: setting PPM correction to " << ppm << " failed" << std::endl;
+        } else {
+            std::clog << "RTL_SDR: " << "PPM correction set to " << ppm << std::endl;
+        }
+    }
+
     // Always use manual gain, the AGC is implemented in software
     rtlsdr_set_tuner_gain_mode(device, 1);
 

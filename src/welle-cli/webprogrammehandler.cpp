@@ -157,6 +157,15 @@ class LameEncoder : public IEncoder {
 ProgrammeSender::ProgrammeSender(Socket&& s) :
     s(move(s))
 {
+#if !defined(_WIN32)
+    // Timeout d'envoi de 30s : si le client ne consomme plus les données
+    // (buffer TCP plein), la socket se ferme automatiquement.
+    // Cela évite que send_stream() bloque indéfiniment et gèle welle-cli.
+    struct timeval tv;
+    tv.tv_sec  = 30;
+    tv.tv_usec = 0;
+    setsockopt(this->s.get_fd(), SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
+#endif
 }
 
 ProgrammeSender::ProgrammeSender(ProgrammeSender&& other) :
