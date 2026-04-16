@@ -132,6 +132,9 @@ class WebRadioInterface : public RadioControllerInterface {
         // Reset du decodeur sans tuer le processus (POST /reset)
         bool handle_reset_post(Socket& s);
 
+        // Force le carousel a decoder immediatement le SID demande (POST /carousel/pin/<sid>)
+        bool handle_carousel_pin_post(Socket& s, const std::string& sid_str);
+
         // Send the Fast Information Channel as a stream.
         // Every FIB is 32 bytes long, there three FIBs per 24ms interval,
         // which gives 32000 bits/s
